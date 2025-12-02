@@ -1,131 +1,366 @@
-# 📘 Docker기반 Pintos 개발 환경 구축 가이드 
+# KAIST PintOS Project 1 - Thread
 
-이 문서는 **Windows**와 **macOS** 사용자가 Docker와 VSCode DevContainer 기능을 활용하여 Pintos OS 프로젝트를 빠르게 구축할 수 있도록 도와줍니다.
+**Team 05 Thread 프로젝트** 구현 문서입니다.
 
-[**주의**]
-* ubunbu:22.04 버전은 충분한 테스트와 검증이 되지 않았습니다. 이 점을 주의해서 사용하시기 바랍니다.
-
-[**참고**] 
-* pintos 도커 환경은 `64비트 기반 X86-64` 기반의 `ubuntu:22.04` 버전을 사용합니다.
-   * kaist-pintos는 오리지널 pintos와 달리 64비트 환경을 지원합니다.
-   * 이번 도커 환경은 ubuntu 22.04를 지원하여 vscode의 최신 버전에서 원격 연결이 안되는 문제를 해결하였습니다.
-* pintos 도커 환경은 kaist-pintos에서 추천하는 qemu 에뮬레이터를 설치하고 사용합니다. 
-* pintos 도커 환경은 9주차부터 13주차까지 같은 환경을 사용합니다. 이 기간동안 별도의 개발 환경을 제공하지 않습니다.
-* 기존 도커 환경과 달리 `vscode`와 통합된 디버깅 환경(F5로 시작하는)을 제공하지 않습니다. 디버깅이 필요한 경우 `gdb`를 사용하세요. 
-* vscode에서 터미널을 오픈하면 자동으로 `source /workspaces/pintos_22.04_lab_docker/pintos/activate`를 실행합니다.
+본 프로젝트는 PintOS 운영체제의 스레드 관리 및 스케줄링 기능을 구현한 프로젝트로, Alarm Clock, Priority Scheduling, Advanced Scheduler(MLFQS) 세 가지 주요 기능을 구현하였습니다.
 
 ---
 
-## 1. Docker란 무엇인가요?
+## 목차
 
-**Docker**는 애플리케이션을 어떤 컴퓨터에서든 **동일한 환경에서 실행**할 수 있게 도와주는 **가상화 플랫폼**입니다.  
-
-Docker는 다음 구성요소로 이루어져 있습니다:
-
-- **Docker Engine**: 컨테이너를 실행하는 핵심 서비스
-- **Docker Image**: 컨테이너 생성에 사용되는 템플릿 (레시피 📃)
-- **Docker Container**: 이미지를 기반으로 생성된 실제 실행 환경 (요리 🍜)
-
-### ✅ AWS EC2와의 차이점
-
-| 구분 | EC2 같은 VM | Docker 컨테이너 |
-|------|-------------|-----------------|
-| 실행 단위 | OS 포함 전체 | 애플리케이션 단위 |
-| 실행 속도 | 느림 (수십 초 이상) | 매우 빠름 (거의 즉시) |
-| 리소스 사용 | 무거움 | 가벼움 |
+1. [Alarm Clock](#1-alarm-clock)
+2. [Priority Scheduling](#2-priority-scheduling)
+3. [Advanced Scheduler (MLFQS)](#3-advanced-scheduler-mlfqs)
+4. [빌드 및 테스트](#빌드-및-테스트)
 
 ---
 
-## 2. VSCode DevContainer란 무엇인가요?
+## 1. Alarm Clock
 
-**DevContainer**는 VSCode에서 Docker 컨테이너를 **개발 환경**처럼 사용할 수 있게 해주는 기능입니다.
+### 개요
+기존 `timer_sleep()` 함수의 busy-waiting 방식을 제거하고, 스레드를 블록 상태로 전환하여 CPU 자원을 효율적으로 사용하도록 개선했습니다.
 
-- 코드를 실행하거나 디버깅할 때 **컨테이너 내부 환경에서 동작**
-- 팀원 간 **환경 차이 없이 동일한 개발 환경 구성** 가능
-- `.devcontainer` 폴더에 정의된 설정을 VSCode가 읽어 자동 구성
+### 주요 구현 내용
+
+#### 데이터 구조
+- **`sleep_list`**: 대기 중인 스레드를 wake_tick 기준으로 정렬하여 관리하는 전역 리스트 ([thread.c:34](pintos/threads/thread.c#L34))
+- **`wake_tick`**: 각 스레드가 깨어나야 할 tick을 저장 ([thread.h:99](pintos/include/threads/thread.h#L99))
+- **`sleep_elem`**: sleep_list에 삽입될 list element ([thread.h:100](pintos/include/threads/thread.h#L100))
+
+#### 알고리즘
+
+**`timer_sleep()` 함수 ([timer.c:87-110](pintos/devices/timer.c#L87-L110))**
+```c
+1. 음수 또는 0 ticks인 경우 즉시 반환
+2. 현재 시간 + sleep_duration을 wake_tick에 저장
+3. 인터럽트를 비활성화하여 임계 영역 보호
+4. wake_tick 기준으로 sleep_list에 정렬 삽입 (wake_tick_less 비교 함수 사용)
+5. thread_block()을 호출하여 스레드 블록
+6. 인터럽트 복원
+```
+
+**`timer_interrupt()` 함수 ([timer.c:125-161](pintos/devices/timer.c#L125-L161))**
+```c
+1. 매 tick마다 호출
+2. sleep_list 앞에서부터 순회
+3. wake_tick <= 현재 tick인 스레드를 모두 깨움
+4. wake_tick > 현재 tick인 스레드를 만나면 즉시 중단 (정렬된 리스트 활용)
+```
+
+### 설계 포인트
+
+1. **정렬된 리스트 사용**: O(1) wake-up 성능을 위해 삽입 시 정렬
+2. **인터럽트 안전성**: 임계 영역에서 인터럽트 비활성화
+3. **예외 처리**: ticks <= 0인 경우 즉시 반환하여 예외 상황 처리
+
+### 관련 파일
+- [pintos/devices/timer.c](pintos/devices/timer.c)
+- [pintos/threads/thread.c](pintos/threads/thread.c)
+- [pintos/include/threads/thread.h](pintos/include/threads/thread.h)
 
 ---
 
-## 3. Docker Desktop 설치하기
+## 2. Priority Scheduling
 
-1. Docker 공식 사이트에서 설치 파일 다운로드:  
-   👉 [https://www.docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop)
+### 개요
+기존의 Round-Robin 스케줄러를 우선순위 기반 선점형 스케줄러로 변경하고, Priority Donation을 구현하여 Priority Inversion 문제를 해결했습니다.
 
-2. 설치 후 Docker Desktop 실행  
-   - Windows: Docker 아이콘이 트레이에 떠야 함  
-   - macOS: 상단 메뉴바에 Docker 아이콘 확인
+### 주요 구현 내용
+
+#### 데이터 구조
+
+**스레드 구조체 추가 ([thread.h:103-106](pintos/include/threads/thread.h#L103-L106))**
+```c
+int original_priority;         // 기부 전 원래 우선순위
+struct list acquired_locks;    // 현재 보유 중인 락 리스트
+struct lock *waiting_for_lock; // 대기 중인 락
+int is_donated;                // 기부 상태 카운터
+```
+
+**락 구조체 추가 ([synch.h:23](pintos/include/threads/synch.h#L23))**
+```c
+struct list_elem holder_elem;  // 스레드의 acquired_locks 리스트 요소
+```
+
+#### 알고리즘
+
+**1. 기본 우선순위 스케줄링**
+- Ready 리스트를 우선순위 순으로 정렬 유지 ([thread.c:277](pintos/threads/thread.c#L277), [365](pintos/threads/thread.c#L365))
+- `thread_priority_less()` 비교 함수: 높은 우선순위가 앞에 오도록 정렬 ([thread.c:779-784](pintos/threads/thread.c#L779-L784))
+- 선점 시점:
+  - `thread_unblock()`: 언블록된 스레드의 우선순위가 더 높으면 양보
+  - `thread_yield()`: 더 높은 우선순위 스레드가 있을 때만 양보
+  - `thread_set_priority()`: 새 우선순위가 낮아지면 양보
+
+**2. Priority Donation ([synch.c:183-243](pintos/threads/synch.c#L183-L243))**
+
+DFS 방식으로 중첩 락에 대한 우선순위 기부를 처리:
+
+```c
+donate_priority_dfs(lock, donating_priority):
+  current_thread = lock.holder
+  depth = 0
+
+  while current_thread exists and depth < 8:
+    if current_thread.priority >= donating_priority:
+      break  // 이미 높은 우선순위를 가짐
+
+    current_thread.priority = donating_priority
+
+    if current_thread is READY:
+      ready_list에서 재정렬  // 우선순위 변경 반영
+
+    if current_thread.waiting_for_lock is NULL:
+      break  // 더 이상 대기 중인 락이 없음
+
+    current_thread = current_thread.waiting_for_lock.holder
+    depth++
+```
+
+**3. Priority Recovery ([synch.c:267-299](pintos/threads/synch.c#L267-L299))**
+
+락 해제 시 우선순위 복구:
+```c
+lock_release():
+  1. acquired_locks에서 해당 락 제거
+  2. 원래 우선순위로 초기화
+  3. 보유 중인 다른 락들의 대기자 중 최고 우선순위 찾기
+  4. 찾은 우선순위가 더 높으면 해당 값으로 갱신
+  5. 필요 시 스레드 양보
+```
+
+**4. 동기화 프리미티브 수정**
+
+- **Semaphore** ([synch.c:103-119](pintos/threads/synch.c#L103-L119))
+  - `sema_up()`: `list_min()`으로 가장 높은 우선순위 대기자 깨움
+
+- **Condition Variable** ([synch.c:367-399](pintos/threads/synch.c#L367-L399))
+  - `cond_signal()`: semaphore 대기자들을 순회하여 최고 우선순위 스레드 깨움
+
+### 설계 포인트
+
+1. **중첩 기부 처리**: 최대 8단계 깊이의 중첩 락 체인 지원
+2. **효율적인 복구**: acquired_locks 리스트로 O(n) 시간에 우선순위 복구
+3. **선점 최적화**: 불필요한 context switch를 줄이기 위해 실제로 필요한 경우에만 선점
+4. **인터럽트 컨텍스트 처리**: `intr_yield_on_return()`으로 인터럽트 핸들러 내 양보 지연
+
+### 관련 파일
+- [pintos/threads/thread.c](pintos/threads/thread.c)
+- [pintos/include/threads/thread.h](pintos/include/threads/thread.h)
+- [pintos/threads/synch.c](pintos/threads/synch.c)
+- [pintos/include/threads/synch.h](pintos/include/threads/synch.h)
 
 ---
 
-## 4. 프로젝트 파일 다운로드 (히스토리 없이)
+## 3. Advanced Scheduler (MLFQS)
 
-터미널(CMD, PowerShell, zsh 등)에서 아래 명령어로 프로젝트 폴더만 내려받습니다:
+### 개요
+Multi-Level Feedback Queue Scheduler를 구현하여 공정한 CPU 시간 분배와 동적 우선순위 조정을 구현했습니다. BSD Unix의 스케줄러를 모델로 한 MLFQS는 nice 값, recent_cpu, load_average를 기반으로 우선순위를 동적으로 계산합니다.
 
+### 주요 구현 내용
+
+#### 데이터 구조
+
+**Fixed-Point 연산 ([fixed-point.h](pintos/include/threads/fixed-point.h))**
+- **17.14 고정소수점 형식**: 17비트 정수부 + 14비트 소수부
+- `F = 1 << 14 = 16384` (1.0을 표현)
+- 주요 매크로:
+  - `INT_TO_FP(n)`: 정수를 고정소수점으로 변환
+  - `FP_TO_INT_ROUND(x)`: 고정소수점을 반올림하여 정수로 변환
+  - `MULT_FP(x, y)`: 고정소수점 곱셈
+  - `DIV_FP(x, y)`: 고정소수점 나눗셈
+  - 사전 계산된 상수: `FP_59_60`, `FP_1_60`
+
+**스레드별 데이터 ([thread.h:109-110](pintos/include/threads/thread.h#L109-L110))**
+```c
+int nice;           // CPU 양보 의지 (-20 ~ 20)
+fixed_t recent_cpu; // 최근 CPU 사용량 (고정소수점)
+```
+
+**전역 데이터 ([thread.c:37-39](pintos/threads/thread.c#L37-L39), [59](pintos/threads/thread.c#L59))**
+```c
+struct list mlfqs_ready_queues[64];  // PRI_MIN ~ PRI_MAX의 64개 우선순위 큐
+int ready_threads_count;              // 준비 상태 스레드 수
+fixed_t load_avg;                     // 시스템 부하 평균
+```
+
+#### 알고리즘
+
+**1. 우선순위 계산 ([thread.c:424-443](pintos/threads/thread.c#L424-L443))**
+```c
+priority = PRI_MAX - (recent_cpu / 4) - (nice * 2)
+결과를 [PRI_MIN, PRI_MAX] 범위로 제한
+```
+- 매 4 ticks마다 실행 중인 스레드의 우선순위 갱신 ([timer.c:147-153](pintos/devices/timer.c#L147-L153))
+- 매 초마다 모든 스레드의 우선순위 갱신 ([timer.c:155-159](pintos/devices/timer.c#L155-L159))
+
+**2. Recent CPU 계산 ([thread.c:503-506](pintos/threads/thread.c#L503-L506))**
+```c
+recent_cpu = (2 * load_avg) / (2 * load_avg + 1) * recent_cpu + nice
+```
+- 매 tick마다 실행 중인 스레드의 recent_cpu 1 증가 ([timer.c:143](pintos/devices/timer.c#L143))
+- 매 초마다 모든 스레드의 recent_cpu 재계산 ([timer.c:157](pintos/devices/timer.c#L157))
+- Idle 스레드는 제외 ([thread.c:498](pintos/threads/thread.c#L498))
+
+**3. Load Average 계산 ([thread.c:483-488](pintos/threads/thread.c#L483-L488))**
+```c
+load_avg = (59/60) * load_avg + (1/60) * ready_threads
+```
+- 매 초마다 갱신 (TIMER_FREQ ticks)
+- ready_threads: 현재 실행 중인 스레드 포함 (idle 제외)
+
+**4. 스레드 스케줄링**
+- **64개 우선순위 큐 사용**: PRI_MIN부터 PRI_MAX까지 각 우선순위별 큐
+- **`next_thread_to_run()`** ([thread.c:586-599](pintos/threads/thread.c#L586-L599))
+  - PRI_MAX부터 아래로 스캔하여 첫 번째 비어있지 않은 큐 찾기
+  - `max_priority_mlfqs_queue()` 헬퍼 함수 사용 ([thread.c:786-793](pintos/threads/thread.c#L786-L793))
+- **동일 우선순위 내에서는 Round-Robin (FIFO)**
+
+#### Timer Interrupt 통합 ([timer.c:139-160](pintos/devices/timer.c#L139-L160))
+
+```c
+매 tick마다:
+  if (thread_mlfqs 활성화):
+    if 현재 스레드가 idle이 아님:
+      recent_cpu++
+
+    if ticks % 4 == 0:
+      현재 스레드 우선순위 갱신
+      필요시 양보
+
+    if ticks % TIMER_FREQ == 0:  // 매 초
+      load_avg 갱신
+      모든 스레드의 recent_cpu 갱신
+      모든 스레드의 우선순위 갱신
+```
+
+#### 초기화
+- **메인 스레드**: nice = 0, recent_cpu = 0 ([thread.c:575-576](pintos/threads/thread.c#L575-L576))
+- **자식 스레드**: 부모의 nice와 recent_cpu 상속 ([thread.c:216-221](pintos/threads/thread.c#L216-L221))
+- **Load average**: 0.0으로 시작 ([thread.c:125](pintos/threads/thread.c#L125))
+
+#### 모드 전환
+- `thread_mlfqs` 전역 boolean으로 제어
+- 커널 명령줄 옵션 "-o mlfqs"로 활성화
+- MLFQS 활성화 시:
+  - Priority Donation 비활성화
+  - `thread_set_priority()` 무시 ([thread.c:374](pintos/threads/thread.c#L374))
+  - 단일 우선순위 리스트 대신 64개 큐 사용
+
+### 설계 포인트
+
+1. **정밀도**: 17.14 고정소수점으로 충분한 정밀도 제공
+2. **효율성**: 사전 계산된 상수(59/60, 1/60)로 연산 최적화
+3. **공정성**: Recent CPU와 nice 값으로 공정한 CPU 시간 분배
+4. **동적 조정**: 시스템 부하에 따라 우선순위 자동 조정
+5. **모듈성**: Priority Scheduling과 MLFQS가 boolean 플래그로 깔끔하게 분리
+
+### 관련 파일
+- [pintos/threads/thread.c](pintos/threads/thread.c)
+- [pintos/include/threads/thread.h](pintos/include/threads/thread.h)
+- [pintos/include/threads/fixed-point.h](pintos/include/threads/fixed-point.h)
+- [pintos/devices/timer.c](pintos/devices/timer.c)
+
+---
+
+## 빌드 및 테스트
+
+### 빌드
 ```bash
-git clone --depth=1 https://github.com/krafton-jungle/pintos_lab_docker.git
+cd pintos/threads
+make
 ```
 
-- `--depth=1` 옵션은 git commit 히스토리를 생략하고 **최신 파일만 가져옵니다.**
-
-### 📂 다운로드 후 폴더 구조 설명
-
-```
-pintos_22.04_lab_docker/
-├── .devcontainer/
-│   ├── devcontainer.json      # VSCode에서 컨테이너 환경 설정
-│   └── Dockerfile             # pintos 개발 환경 도커 이미지 정의
-│
-├── pintos
-│   ├── threads                # 9주차 threads 프로젝트 폴더
-│   ├── userprog               # 10-11주차 user program 프로젝트 폴더
-│   └── vm                     # 12-13주차 virtual memory 프로젝트 폴더
-│
-└── README.md                  # 현재 문서
-```
----
-
-## 5. VSCode에서 해당 프로젝트 폴더 열기
-
-1. VSCode를 실행
-2. `파일 → 폴더 열기`로 방금 클론한 `pintos_22.04_lab_docker` 폴더를 선택
-
----
-
-## 6. 개발 컨테이너: 컨테이너에서 열기
-
-1. VSCode에서 `Ctrl+Shift+P` (Windows/Linux) 또는 `Cmd+Shift+P` (macOS)를 누릅니다.
-2. 명령어 팔레트에서 `Dev Containers: Reopen in Container`를 선택합니다.
-3. 이후 컨테이너가 자동으로 실행되고 빌드됩니다. 처음 컨테이너를 열면 빌드하는 시간이 오래걸릴 수 있습니다. 빌드 후, 프로젝트가 **컨테이너 안에서 실행됨**.
-
----
-
-## 7. C 파일에 브레이크포인트 설정 후 디버깅 (F5)
-pintos 랩에서는 vscode기반의 디버깅을 지원하지 않습니다. 
-
----
-## 8. 새로운 Git 리포지토리에 Commit & Push 하기
-
-금주 프로젝트를 개인 Git 리포와 같은 다른 리포지토리에 업로드하려면, 기존 Git 연결을 제거하고 새롭게 초기화해야 합니다.
-
-### ✅ 완전히 새로운 Git 리포로 업로드하는 방법
-
-아래 명령어를 순서대로 실행하세요:
-
+### 전체 테스트 실행
 ```bash
-rm -rf .git
-git init
-git remote add origin https://github.com/myusername/my-new-repo.git
-git add .
-git commit -m "Clean start"
-git push -u origin main
+make check
 ```
 
-### 📌 설명
+### 개별 테스트 실행
 
-- `rm -rf .git`: 기존 Git 기록과 연결을 완전히 삭제합니다.
-- `git init`: 현재 폴더를 새로운 Git 리포지토리로 초기화합니다.
-- `git remote add origin ...`: 새로운 리포지토리 주소를 origin으로 등록합니다.
-- `git add .` 및 `git commit`: 모든 파일을 커밋합니다.
-- `git push`: 새로운 리포에 최초 업로드(Push)합니다.
+**Alarm Clock 테스트:**
+```bash
+make tests/threads/alarm-single.result
+make tests/threads/alarm-multiple.result
+make tests/threads/alarm-simultaneous.result
+make tests/threads/alarm-priority.result
+```
 
-이 과정을 거치면 기존 리포와의 연결은 완전히 제거되고, **새로운 독립적인 프로젝트로 관리**할 수 있습니다.
+**Priority Scheduling 테스트:**
+```bash
+make tests/threads/priority-change.result
+make tests/threads/priority-preempt.result
+make tests/threads/priority-donate-one.result
+make tests/threads/priority-donate-multiple.result
+make tests/threads/priority-donate-nest.result
+make tests/threads/priority-donate-chain.result
+make tests/threads/priority-sema.result
+make tests/threads/priority-condvar.result
+```
+
+**MLFQS 테스트:**
+```bash
+make tests/threads/mlfqs-load-1.result
+make tests/threads/mlfqs-load-60.result
+make tests/threads/mlfqs-recent-1.result
+make tests/threads/mlfqs-fair-2.result
+make tests/threads/mlfqs-fair-20.result
+make tests/threads/mlfqs-nice-2.result
+make tests/threads/mlfqs-nice-10.result
+make tests/threads/mlfqs-block.result
+```
+
+### 테스트 결과 확인
+```bash
+# 전체 결과 요약
+make grade
+
+# 특정 테스트 상세 결과
+cat tests/threads/[test-name].output
+```
+
+---
+
+## 프로젝트 구조
+
+```
+pintos/
+├── threads/
+│   ├── thread.c          # 스레드 관리 및 스케줄링 핵심 로직
+│   ├── thread.h          # 스레드 구조체 및 함수 선언
+│   ├── synch.c           # 동기화 프리미티브 (lock, semaphore, condition variable)
+│   └── synch.h           # 동기화 관련 구조체 및 함수 선언
+├── devices/
+│   ├── timer.c           # Timer interrupt 및 sleep 처리
+│   └── timer.h           # Timer 관련 함수 선언
+└── include/
+    └── threads/
+        ├── fixed-point.h # 고정소수점 연산 매크로 (MLFQS용)
+        ├── thread.h      # 스레드 구조체 정의
+        └── synch.h       # 동기화 구조체 정의
+```
+
+---
+
+## 구현 하이라이트
+
+### 동기화 메커니즘
+1. **인터럽트 비활성화**: 모든 임계 영역에서 `intr_disable()` / `intr_set_level()` 사용
+2. **정렬된 리스트**: `list_insert_ordered()`로 우선순위 순서 유지
+3. **컨텍스트 인식 양보**: `intr_context()` 체크 및 `intr_yield_on_return()` 사용
+4. **TID 할당 보호**: `tid_lock`으로 스레드 ID 카운터 보호
+
+### 핵심 설계 원칙
+1. **효율성**: Alarm Clock의 O(1) wake-up, 정렬된 리스트 활용
+2. **정확성**: 인터럽트 처리로 race condition 방지
+3. **모듈성**: MLFQS와 Priority Scheduling이 boolean 플래그로 분리
+4. **완전성**: 최대 8단계 중첩 donation 처리
+5. **정밀도**: 17.14 고정소수점으로 MLFQS 계산의 충분한 정밀도 제공
+
+---
+
+## 팀 정보
+
+**KAIST PintOS Project 1 - Team 05**
+
+본 프로젝트는 기존 PintOS의 Round-Robin 스케줄러를 개선하여 효율적인 Alarm Clock, 우선순위 기반 선점형 스케줄링, 그리고 공정한 CPU 시간 분배를 위한 MLFQS를 구현하였습니다.
