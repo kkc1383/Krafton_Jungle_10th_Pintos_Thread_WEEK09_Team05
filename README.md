@@ -1,8 +1,20 @@
 # KAIST PintOS Project 1 - Thread
 
-**Team 05 Thread 프로젝트** 구현 문서입니다.
+**Pintos Project1 Thread 프로젝트** 구현 문서입니다.
 
 본 프로젝트는 PintOS 운영체제의 스레드 관리 및 스케줄링 기능을 구현한 프로젝트로, Alarm Clock, Priority Scheduling, Advanced Scheduler(MLFQS) 세 가지 주요 기능을 구현하였습니다.
+
+공식 문서: [https://casys-kaist.github.io/pintos-kaist/project1/introduction.html](https://casys-kaist.github.io/pintos-kaist/project1/introduction.html)
+
+## 📎 관련 프로젝트
+본 프로젝트는 KAIST PintOS 시리즈 중 **Project 1 (Thread)** 에 해당하며,  
+이후 단계 프로젝트는 아래에서 확인할 수 있습니다.
+
+- **Project 2 — User Program**  
+  🔗 https://github.com/kkc1383/Krafton_Jungle_10th_Pintos_User_Program_WEEK10_11_Team11  
+
+- **Project 3 — Virtual Memory**  
+  🔗 https://github.com/kkc1383/Krafton_Jungle_Pintos_Virtual_Memory_WEEK12_13_Team12  
 
 ---
 
@@ -362,5 +374,6 @@ pintos/
 ## 팀 정보
 
 **KAIST PintOS Project 1 - Team 05**
+
 
 본 프로젝트는 기존 PintOS의 Round-Robin 스케줄러를 개선하여 효율적인 Alarm Clock, 우선순위 기반 선점형 스케줄링, 그리고 공정한 CPU 시간 분배를 위한 MLFQS를 구현하였습니다.
